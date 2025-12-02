@@ -1,0 +1,28 @@
+version: '3.8'
+
+volumes:
+  db_storage:
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: rag-postgres
+    restart: always
+
+    environment:
+      - POSTGRES_USER=n8n
+      - POSTGRES_PASSWORD=n8npw
+      - POSTGRES_DB=n8n
+
+    ports:
+      - "5432:5432" 
+
+    volumes:
+      - db_storage:/var/lib/postgresql/data
+      - ./init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U 'n8n' -d 'n8n'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
