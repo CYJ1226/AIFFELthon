@@ -3,19 +3,26 @@ version: '3.8'
 volumes:
   n8n_storage:
 
+networks:
+  shared_network:
+    external: true
+
 services:
   n8n:
     build: .
     container_name: n8n
     restart: on-failure
 
+    networks:
+      - shared_network
+
     environment:
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=rag-postgres
+      - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=n8n
-      - DB_POSTGRESDB_PASSWORD=n8npw
+      - DB_POSTGRESDB_PASSWORD=n8nthankyou
 
     ports:
       - "5678:5678"
@@ -23,6 +30,3 @@ services:
     volumes:
       - n8n_storage:/home/node/.n8n
       - ./python_scripts:/home/node/python_scripts
-networks:
-  default:
-    name: db_com_default

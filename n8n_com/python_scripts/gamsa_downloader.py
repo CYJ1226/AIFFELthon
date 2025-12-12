@@ -4,6 +4,9 @@ import sys
 import time
 import requests
 from requests.exceptions import RequestException
+from json.decoder import JSONDecodeError
+from bs4 import BeautifulSoup
+
 
 BASE_API = "https://www.bai.go.kr/api/bak/dar/AWUBAKDAR001E"
 DOWNLOAD_API = "https://www.bai.go.kr/api/files/downloadZip"
@@ -12,7 +15,7 @@ SAVE_DIR = "downloads_gamsa"
 STATE_FILE = os.path.join(SAVE_DIR, "state_gamsa.json")
 FAILED_FILE = os.path.join(SAVE_DIR, "failed_gamsa.json")
 
-LIMIT = 30
+LIMIT = 99999
 
 def log(msg: str):
     return 
@@ -97,15 +100,14 @@ def download_pdf(file_id: str, failed_list: dict):
             "fileId": file_id,
             "reason": str(e)
         })
-        return False, None, None, None
+        return False, None, None, None, None
 
     if res.status_code != 200:
         failed_list["failed"].append({
             "fileId": file_id,
             "reason": f"HTTP {res.status_code}"
         })
-        return False, None, None, None
-
+        return False, None, None, None, None
 
     os.makedirs(SAVE_DIR, exist_ok=True)
     filename = f"{file_id}.pdf"
@@ -118,18 +120,46 @@ def download_pdf(file_id: str, failed_list: dict):
     url = f"{DOWNLOAD_API}?fileId={file_id}"
     log(f"[GAMSA] 저장 완료: {filepath}")
 
-    return True, filename,filepath, t, url
+    return True, filename, filepath, t, url
+
+
+def write_gamsa_count(state: dict):
+    """state['download'] 기준으로 분야별 카운트 파일 생성"""
+    field_count = {}
+    for item in state.get("download", []):
+        field = item.get("audField") or "기타"
+        field_count[field] = field_count.get(field, 0) + 1
+
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    with open(os.path.join(SAVE_DIR, "gamsa_count.json"), "w", encoding="utf-8") as f:
+        json.dump(field_count, f, ensure_ascii=False, indent=2)
+
+
+def write_gamsa_count(state: dict):
+    """state['download'] 기준으로 분야별 카운트 파일 생성"""
+    field_count = {}
+    for item in state.get("download", []):
+        field = item.get("audField") or "기타"
+        field_count[field] = field_count.get(field, 0) + 1
+
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    with open(os.path.join(SAVE_DIR, "gamsa_count.json"), "w", encoding="utf-8") as f:
+        json.dump(field_count, f, ensure_ascii=False, indent=2)
+
 
 def run_gamsa():
     state = load_state()
     if len(state["download"]) >= LIMIT:
+        write_gamsa_count(state)
         return {"status": "ok", "results": [], "message": "Limit reached"}
+
     downloaded_ids = {e["fileId"] for e in state["download"]}
     failed = load_failed()
     results = []
 
     items0, total_pages, ok = fetch_page(0)
     if ok != "ok":
+        write_gamsa_count(state)
         return {"status": "error", "error": "fetch_failed"}
 
     log(f"[GAMSA] 전체 페이지 수: {total_pages}")
@@ -138,18 +168,37 @@ def run_gamsa():
         log(f"[GAMSA] ==== page {page+1}/{total_pages} ====")
 
         items = items0 if page == 0 else fetch_page(page)[0]
-        should_stop = False
 
         for item in items:
+            # 파일 ID
             file_id = item.get("openDocId")
             if not file_id or not file_id.startswith("jj") or file_id in downloaded_ids:
                 continue
 
-            ok2, filename, filepath ,t, url = download_pdf(file_id, failed)
+            aud_kind = item.get("audKndNm")
+            aud_field = (
+                item.get("audSphDtlNm")
+                or item.get("audSphNm")
+                or item.get("audKndNm")
+                or "기타"
+            )
+            open_dt = item.get("openDt")
+            open_hm = item.get("openHm")
+            reg_date = None
 
-            
+            if open_dt:
+                y, m, d = open_dt[0:4], open_dt[4:6], open_dt[6:8]
+                if open_hm and len(open_hm) == 4:
+                    hh, mm = open_hm[0:2], open_hm[2:4]
+                    reg_date = f"{y}-{m}-{d} {hh}:{mm}:00"
+                else:
+                    reg_date = f"{y}-{m}-{d}"
+
+            source = "감사원"
+            ok2, filename, filepath, t, url = download_pdf(file_id, failed)
+
             if not ok2 and filename is None and url is None:
-                state_val = "no_data"  
+                state_val = "no_data"
             else:
                 state_val = "success" if ok2 else "failure"
 
@@ -158,8 +207,12 @@ def run_gamsa():
                 "fileId": file_id,
                 "filename": filename,
                 "url": url,
-                "time": t,
                 "filepath": filepath,
+                "time": t,
+                "audKind": aud_kind,
+                "audField": aud_field,
+                "regDate": reg_date,
+                "source": source,
             }
             results.append(entry)
 
@@ -167,37 +220,21 @@ def run_gamsa():
                 state["download"].append(entry)
                 downloaded_ids.add(file_id)
                 save_state(state)
+
             if len(state["download"]) >= LIMIT:
                 save_state(state)
                 save_failed(failed["failed"])
+                write_gamsa_count(state)
                 return {"status": "ok", "results": results}
 
             time.sleep(0.1)
 
-    save_failed(failed)
+    save_failed(failed["failed"])
+    write_gamsa_count(state)
     return {"status": "ok", "results": results}
 
 if __name__ == "__main__":
     results = run_gamsa()  
     print("done")
-    # try:
-    #     with open(STATE_FILE, "r", encoding="utf-8") as f:
-    #         state = json.load(f)     
-    # except:
-    #     state = {"download": [], "failed": [], "limit": LIMIT}
 
-    # try:
-    #     with open(FAILED_FILE, "r", encoding="utf-8") as f:
-    #         failed = json.load(f)
-    # except:
-    #     failed = {"failed": []}
-
-    # print(json.dumps({
-    #     "status": "ok",
-    #     "results_count": len(results["results"]),
-    #     "download_count": len(state["download"]),
-    #     "failed_count": len(state["failed"]),
-    #     "state_file": STATE_FILE,
-    #     "failed_file": FAILED_FILE
-    # }, ensure_ascii=False))
 

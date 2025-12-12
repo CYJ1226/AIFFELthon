@@ -5,17 +5,17 @@ volumes:
 
 services:
   postgres:
-    image: postgres:16
-    container_name: rag-postgres
-    restart: always
+    image: ankane/pgvector:latest
+    container_name: postgres
+    restart: unless-stopped
 
     environment:
       - POSTGRES_USER=n8n
-      - POSTGRES_PASSWORD=n8npw
+      - POSTGRES_PASSWORD=n8nthankyou
       - POSTGRES_DB=n8n
 
     ports:
-      - "5432:5432" 
+      - "47147:5432"
 
     volumes:
       - db_storage:/var/lib/postgresql/data
@@ -26,3 +26,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+networks:
+  default:
+    name: shared_network
+    external: true

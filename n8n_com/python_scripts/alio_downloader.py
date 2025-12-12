@@ -4,9 +4,7 @@ import sys
 import time
 import datetime
 import requests
-import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from requests.exceptions import RequestException
 
 BASE_URL = "https://www.alio.go.kr"
 ORG_API = f"{BASE_URL}/item/itemOrganListJung.json"   
@@ -17,15 +15,81 @@ STATE_FILE = os.path.join(SAVE_DIR, "state_alio.json")
 FAILED_FILE = os.path.join(SAVE_DIR, "failed_alio.json")
 
 MAX_WORKERS = 5
-LIMIT = 30
-
-
-def log(msg: str):
-    return 
+LIMIT = 99999
 
 # def log(msg: str):
-#     sys.stderr.write(msg + "\n")
-#     sys.stderr.flush()
+#     return 
+
+MINISTRY_TO_FIELD = {
+# 재정/금융
+    "기획재정부": "재정",
+    "금융위원회": "금융",
+    
+#세무
+    "관세청": "관세",
+
+# 산업
+    "산업통상자원부": "산업자원",
+    "중소벤처기업부": "산업자원",
+    "지식재산처": "산업자원",
+    "농촌진흥원": "농림수산해양",
+    "농림축산식품부": "농림수산해양",
+    "해양수산부": "농림수산해양",
+    "산림청": "환경",
+    "기후에너지환경부": "환경",
+    
+# 정보통신/과학
+    "과학기술정보통신부": "과학기술",
+    "기상청": "과학기술",
+    "원자력안전위원회": "과학기술",
+    "우주항공청": "과학기술",
+    "방송미디어통신위원회": "정보통신",
+    "국가데이터처": "정보통신",
+
+# 건설/교통
+    "국토교통부": "교통/물류",
+    "행정중심복합도시건설청": "건설/주택",
+    "새만금개발청": "해양",
+
+# 교육/문화
+    "교육부": "교육",
+    "문화체육관광부": "문화/관광/체육",
+    "국가유산청": "문화/관광/체육",
+
+# 보건/복지/노동
+    "보건복지부": "보건/복지",
+    "질병관리청": "보건/복지",
+    "식품의약품안전처": "보건/복지",
+    "국가보훈부": "보건/복지",
+    "성평등가족부": "보건/복지",
+    "고용노동부": "노동",
+
+# 외교/안보
+    "외교부": "외교",
+    "재외동포청": "외교",
+    "통일부": "외교",
+    "국방부": "국방",
+    "방위사업청": "국방",
+    "경찰청": "치안/법무",
+    "해양경찰청": "치안/법무",
+    "법무부": "치안/법무",
+
+# 지방행정
+    "행정안전부": "지방행정",
+    "소방청": "지방행정",
+    
+#헌법기관
+    "법제처": "입법",
+
+# 공직기강/기타
+    "인사혁신처": "공직기강",
+    "국무조정실": "공직기강",
+    
+}
+
+def log(msg: str):
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
 
 def now_str() -> str:
     return datetime.datetime.now().isoformat()
@@ -42,12 +106,12 @@ def load_state():
 def save_state(state: dict):
     os.makedirs(SAVE_DIR, exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, )
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
 def save_failed(failed_list: list):
     os.makedirs(SAVE_DIR, exist_ok=True)
     with open(FAILED_FILE, "w", encoding="utf-8") as f:
-        json.dump({"failed": failed_list}, f, ensure_ascii=False, )
+        json.dump({"failed": failed_list}, f, ensure_ascii=False,indent=2 )
 
 def fetch_organ_list() -> list:
     payload = {
@@ -75,147 +139,152 @@ def parse_files(files_str: str) -> list:
             out.append({"f": f.strip(), "title": title.strip()})
     return out
 
-def download_one(meta: dict, failed_list: list):
-
-    os.makedirs(SAVE_DIR, exist_ok=True)
+def download_pdf(meta: dict, session: requests.Session):
+    log(f"[DL] START {meta['fileId']}")
 
     url = f"{DOWNLOAD_API}?f={meta['f']}&d={meta['d']}"
     filepath = os.path.join(SAVE_DIR, meta["filename"])
 
     try:
-        res = requests.get(url, timeout=20)
-        res.raise_for_status()
+        r = session.get(url, timeout=10)
+        r.raise_for_status()
 
         with open(filepath, "wb") as f:
-            f.write(res.content)
+            f.write(r.content)
 
-        log(f"[ALIO] 저장 완료 → {filepath}")
-
-        download_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        return True, filepath, url, download_time
+        log(f"[DL] OK {meta['fileId']} -> {filepath}")
+        return True, filepath, url, now_str(), None
 
     except Exception as e:
-        log(f"[ALIO] 실패: {meta['filename']} | {e}")
-        download_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        log(f"[DL] FAIL {meta['fileId']} | {e}")
+        return False, None, None, now_str(), str(e)
 
-        failed_entry = {
-            "fileId": meta["fileId"],
-            "filename": meta["filename"],
-            "reason": str(e),
-            "time": download_time,
-        }
-        failed_list.append(failed_entry)
-        save_failed(failed_list)
-        return False, None, None, None
+def write_alio_count(state: dict):
+    field_count = {}
+
+    for item in state.get("download", []):
+        field = item.get("audField") or "기타"
+        field_count[field] = field_count.get(field, 0) + 1
+
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    with open(os.path.join(SAVE_DIR, "alio_count.json"), "w", encoding="utf-8") as f:
+        json.dump(field_count, f, ensure_ascii=False, indent=2)
+
+    return field_count
+
 
 def run_alio():
 
+    log("[ALIO] RUN START")
+
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    state_list = load_state()
-    if len(state_list["download"]) >= LIMIT:
-        return {"status": "ok", "results": [], "message": "Limit reached"}
-    downloaded_ids = {e["fileId"] for e in state_list["download"]}
-    failed_list = []
-    results = []
+    state = load_state()
+    failed = []
+    downloaded_ids = {e["fileId"] for e in state["download"]}
 
     try:
         organs = fetch_organ_list()
+        log(f"[ALIO] ORGAN COUNT = {len(organs)}")
     except Exception as e:
-        log(f"[ALIO] 기관 목록 로드 실패: {e}")
-        return {"status": "error", "error": "organ_list_failed", "detail": str(e)}
+        log(f"[ERROR] FETCH ORGAN LIST FAILED {e}")
+        return {"status": "error", "detail": str(e)}
 
     jobs = []
 
     for org in organs:
-        org_name = org.get("apbaNa")
-        d_val = org.get("disclosureNo")
-        files_str = org.get("files")
-
-        if not org_name or not d_val or not files_str:
+        files = org.get("files")
+        d = org.get("disclosureNo")
+        if not files or not d:
             continue
+        for f in parse_files(files):
+            fid = f["f"]
+            if fid not in downloaded_ids:
+                dept_name = org.get("jidtNa")
+                aud_field = MINISTRY_TO_FIELD.get(dept_name, "기타")
 
-        for f in parse_files(files_str):
-            file_id = f["f"]
-            title = f["title"]
+                jobs.append({
+                    "fileId": fid,
+                    "filename": f"{org['apbaNa']}_{f['title']}_{fid}.pdf".replace(" ", "_"),
+                    "orgName": org['apbaNa'],
+                    "title": f['title'],
+                    "d": d,
+                    "orgType": org.get("apbaType"),
+                    "mainDept": org.get("jidtDptm"),
+                    "typeNa": org.get("typeNa"),
+                    "jidtNa": dept_name,
+                    "audField": aud_field,
+                    "f": fid,
+                })
+                
+                log(f"[JOB] ADD {fid}")
 
-            if file_id in downloaded_ids:
-                continue
+    session = requests.Session()
 
-            filename = f"{org_name}_{title}_{file_id}.pdf".replace(" ", "_")
+    for i in range(0, len(jobs), MAX_WORKERS):
+        chunk = jobs[i:i + MAX_WORKERS]
+        log(f"[BATCH] START {i} ~ {i + len(chunk) - 1}")
 
-            meta = {
-                "fileId": file_id,
-                "filename": filename,
-                "org": org_name,
-                "title": title,
-                "d": d_val,
-                "f": file_id,
-            }
+        successes = []
+        failures = []
 
-            jobs.append(meta)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+            futures = {exe.submit(download_pdf, job, session): job for job in chunk}
 
-    #  병렬 다운로드
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
-        futures = {exe.submit(download_one, j, failed_list): j for j in jobs}
+            for fut in futures:
+                job = futures[fut]
+                try:
+                    ok, fp, url, t, reason = fut.result(timeout=20)
+                except Exception as e:
+                    log(f"[FUT-ERROR] {job['fileId']} | {e}")
+                    ok, fp, url, t, reason = False, None, None, now_str(), str(e)
 
-        for fut in as_completed(futures):
-            meta = futures[fut]
-            ok, filepath, url, t = fut.result()
+                entry = {
+                    "fileId": job["fileId"],
+                    "filename": job["filename"],
+                    "filepath": fp,
+                    "url": url,
+                    "time": t,
+                    "orgName": job["orgName"],
+                    "title": job["title"],
+                    "disclosureNo": job["d"],
+                    "orgType": job["orgType"],
+                    "mainDept": job["mainDept"],
+                    "typeNa": job.get("typeNa"),
+                    "parentDept": job.get("jidtNa"),
+                    "audField": job.get("audField"),
+                    "source": "알리오",
+                    "state": "success" if ok else "failure",
+                }
 
-            entry = {
-                "state": "success" if ok else "failure",
-                "fileId": meta["fileId"],
-                "filename": meta["filename"],
-                "url": url,
-                "time": t,
-                "filepath": filepath,
-            }
+                if ok:
+                    successes.append(entry)
+                else:
+                    failures.append({"fileId": job["fileId"], "filename": job["filename"], "reason": reason, "time": t})
 
-            results.append(entry)
+        if successes:
+            state["download"].extend(successes)
+            save_state(state)
+            log(f"[STATE] +{len(successes)}")
 
-            if ok:
-                state_list["download"].append(entry)
-                downloaded_ids.add(meta["fileId"])
-                save_state(state_list)  
-            
-            if len(state_list["download"]) >= LIMIT:
-                save_state(state_list)
-                for future in futures:
-                    future.cancel()
-                break
+        if failures:
+            failed.extend(failures)
+            save_failed(failed)
+            log(f"[FAILED] +{len(failures)}")
 
-    save_failed(failed_list)
+        log("[BATCH] END")
+    log("[ALIO] DONE")
+    write_alio_count(state)
+    log("[COUNT] 분야별 카운트 저장 완료")
 
-    return {"status": "ok", "results": results}
+    return {"status": "ok"}
+
+
 
 if __name__ == "__main__":
     run_alio()
     print("done")
-    # try:
-    #     with open(STATE_FILE, "r", encoding="utf-8") as f:
-    #         state = json.load(f)
-    # except:
-    #     state = {"download": [], "failed": [], "limit": LIMIT}
 
-    # try:
-    #     with open(FAILED_FILE, "r", encoding="utf-8") as f:
-    #         failed = json.load(f)
-    # except:
-    #     failed = {"failed": []}
-
-    # RESULT_FILE = os.path.join(SAVE_DIR, "alio_result.json")
-    # with open(RESULT_FILE, "w", encoding="utf-8") as f:
-    #     json.dump(results, f, ensure_ascii=False,)
-
-    # print(json.dumps({
-    #     "status": "ok",
-    #     "result_file": RESULT_FILE,
-    #     "state_file": STATE_FILE,
-    #     "failed_file": FAILED_FILE,
-    #     "download_count": len(state["download"]),
-    #     "limit": state["limit"]
-    # }, ensure_ascii=False))
 
 
 

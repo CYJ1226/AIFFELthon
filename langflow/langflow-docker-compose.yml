@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  langflow:
+    image: langflowai/langflow:latest
+    container_name: langflow
+    ports:
+      - "7860:7860"
+    environment:
+      - LANGFLOW_HOST=0.0.0.0
+      - LANGFLOW_DATABASE_URL=sqlite:///langflow.db
+    volumes:
+      - ./data:/data
+    networks:
+      - shared_network   # ← 네 컨테이너와 동일 네트워크!
+
+networks:
+  shared_network:
+    external: true
