@@ -90,11 +90,24 @@ def fetch_page(page: int, retries: int = 3, delay: float = 2.0):
     log(f"[GAMSA] 페이지={page} 요청 실패 | 마지막 에러={last_error}")
     return [], 0, "error"
 
+import re
+import mimetypes
+
+import re
+import mimetypes
+import zipfile
+from io import BytesIO
+
 def download_pdf(file_id: str, failed_list: dict):
     log(f"[GAMSA] 다운로드 시도: {file_id}")
 
     try:
-        res = requests.post(DOWNLOAD_API, json={"fileId": file_id}, timeout=30)
+        res = requests.post(
+            DOWNLOAD_API,
+            json={"fileId": file_id},
+            timeout=30,
+            stream=True
+        )
     except Exception as e:
         failed_list["failed"].append({
             "fileId": file_id,
@@ -110,17 +123,53 @@ def download_pdf(file_id: str, failed_list: dict):
         return False, None, None, None, None
 
     os.makedirs(SAVE_DIR, exist_ok=True)
-    filename = f"{file_id}.pdf"
-    filepath = os.path.join(SAVE_DIR, filename)
 
-    with open(filepath, "wb") as f:
-        f.write(res.content)
+    # ===== 파일명 추출 =====
+    filename = None
+    cd = res.headers.get("Content-Disposition", "")
+    match = re.search(r'filename="?([^"]+)"?', cd)
+    if match:
+        filename = match.group(1)
+
+    if not filename:
+        content_type = res.headers.get("Content-Type", "")
+        ext = mimetypes.guess_extension(content_type.split(";")[0])
+        filename = f"{file_id}{ext if ext else ''}"
 
     t = time.strftime("%Y-%m-%d %H:%M:%S")
     url = f"{DOWNLOAD_API}?fileId={file_id}"
-    log(f"[GAMSA] 저장 완료: {filepath}")
 
+    # ===== 🔥 ZIP 처리 =====
+    if filename.lower().endswith(".zip"):
+        folder_name = os.path.splitext(filename)[0]
+        folder_path = os.path.join(SAVE_DIR, folder_name)
+        os.makedirs(folder_path, exist_ok=True)
+
+        try:
+            zip_bytes = BytesIO(res.content)
+            with zipfile.ZipFile(zip_bytes) as zf:
+                zf.extractall(folder_path)
+        except Exception as e:
+            failed_list["failed"].append({
+                "fileId": file_id,
+                "reason": f"zip extract error: {e}"
+            })
+            return False, None, None, None, None
+
+        log(f"[GAMSA] ZIP 압축 해제 완료: {folder_path}")
+        return True, filename, folder_path, t, url
+
+    # ===== ZIP이 아닌 경우 그대로 저장 =====
+    filepath = os.path.join(SAVE_DIR, filename)
+    with open(filepath, "wb") as f:
+        for chunk in res.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+
+    log(f"[GAMSA] 저장 완료: {filepath}")
     return True, filename, filepath, t, url
+
+
 
 
 def write_gamsa_count(state: dict):
