@@ -283,7 +283,6 @@ def run():
         audit_field = item.get("auditField", "기타")
         submission_no = item.get("submissionNo")
         
-        # 이미 다운받은 것 스킵
         if submission_no in downloaded_ids:
             continue
         
@@ -293,12 +292,10 @@ def run():
         if TARGET_FIELDS and audit_field not in TARGET_FIELDS:
             continue
         
-        # ★★★ state + 현재 필터링 개수 합산해서 체크 ★★★
         total_in_field = state_field_counter.get(audit_field, 0) + field_counter[audit_field]
         if MAX_PER_FIELD and total_in_field >= MAX_PER_FIELD:
             continue
         
-        # ★★★ 전체 개수도 state + 현재 합산 ★★★
         total_count = len(downloaded_ids) + len(filtered)
         if MAX_TOTAL_DOWNLOAD and total_count >= MAX_TOTAL_DOWNLOAD:
             break
