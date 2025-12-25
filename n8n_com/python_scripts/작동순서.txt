@@ -1,0 +1,9 @@
+작동순서
+gamsa_change_state.py 실행
+downloads_gamsa 폴더안 state.json 에서 parser_state : failed 만 추출하여 failed_gamsa_re.json 자동생성
+gamsa_restoration.py 실행
+downloads_gamsa 폴더안 failed_gamsa_re.json파일 read후 재 다운로드 진행
+downloads_gamsa_restore폴더생성후 재다운로드 파일저장
+이때도 실패한 파일 downloads_gamsa_restore폴더안 failed_restore.json파일생성
+
+압축파일 해체부분은 종석님 n8n 로직에 있으셔서 진행하지않았습니다.
