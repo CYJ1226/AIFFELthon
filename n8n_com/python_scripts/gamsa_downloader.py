@@ -3,6 +3,11 @@ import json
 import sys
 import time
 import requests
+import re
+import mimetypes
+import re
+import zipfile
+from io import BytesIO
 from requests.exceptions import RequestException
 from json.decoder import JSONDecodeError
 from bs4 import BeautifulSoup
@@ -90,14 +95,6 @@ def fetch_page(page: int, retries: int = 3, delay: float = 2.0):
     log(f"[GAMSA] 페이지={page} 요청 실패 | 마지막 에러={last_error}")
     return [], 0, "error"
 
-import re
-import mimetypes
-
-import re
-import mimetypes
-import zipfile
-from io import BytesIO
-
 def download_pdf(file_id: str, failed_list: dict):
     log(f"[GAMSA] 다운로드 시도: {file_id}")
 
@@ -124,7 +121,6 @@ def download_pdf(file_id: str, failed_list: dict):
 
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # ===== 파일명 추출 =====
     filename = None
     cd = res.headers.get("Content-Disposition", "")
     match = re.search(r'filename="?([^"]+)"?', cd)
@@ -139,7 +135,6 @@ def download_pdf(file_id: str, failed_list: dict):
     t = time.strftime("%Y-%m-%d %H:%M:%S")
     url = f"{DOWNLOAD_API}?fileId={file_id}"
 
-    # ===== 🔥 ZIP 처리 =====
     if filename.lower().endswith(".zip"):
         folder_name = os.path.splitext(filename)[0]
         folder_path = os.path.join(SAVE_DIR, folder_name)
@@ -159,7 +154,6 @@ def download_pdf(file_id: str, failed_list: dict):
         log(f"[GAMSA] ZIP 압축 해제 완료: {folder_path}")
         return True, filename, folder_path, t, url
 
-    # ===== ZIP이 아닌 경우 그대로 저장 =====
     filepath = os.path.join(SAVE_DIR, filename)
     with open(filepath, "wb") as f:
         for chunk in res.iter_content(chunk_size=8192):
@@ -173,7 +167,6 @@ def download_pdf(file_id: str, failed_list: dict):
 
 
 def write_gamsa_count(state: dict):
-    """state['download'] 기준으로 분야별 카운트 파일 생성"""
     field_count = {}
     for item in state.get("download", []):
         field = item.get("audField") or "기타"
@@ -185,7 +178,6 @@ def write_gamsa_count(state: dict):
 
 
 def write_gamsa_count(state: dict):
-    """state['download'] 기준으로 분야별 카운트 파일 생성"""
     field_count = {}
     for item in state.get("download", []):
         field = item.get("audField") or "기타"
@@ -219,7 +211,6 @@ def run_gamsa():
         items = items0 if page == 0 else fetch_page(page)[0]
 
         for item in items:
-            # 파일 ID
             file_id = item.get("openDocId")
             if not file_id or not file_id.startswith("jj") or file_id in downloaded_ids:
                 continue
